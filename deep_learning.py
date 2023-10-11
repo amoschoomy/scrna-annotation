@@ -72,6 +72,8 @@ sc.pp.normalize_total(adata_filtered, target_sum=None, inplace=True)
 # Log transform the data
 adata_filtered
 sc.pp.log1p(adata_filtered)
+
+# %%
 # %%
 # Filter for highly variable gene
 sc.pp.highly_variable_genes(adata_filtered, min_mean=0.0125, max_mean=3, min_disp=0.5)
@@ -84,4 +86,9 @@ sc.tl.pca(adata_filtered, svd_solver='arpack')
 sc.pp.neighbors(adata_filtered, n_neighbors=15, n_pcs=40)
 # Embedding the neighborhood graph
 sc.tl.umap(adata_filtered)
+# %%
+sc.pl.umap(adata_filtered, color=['LYZ','CD3E','MS4A1'] )
+# %%
+sc.pl.pca(adata_filtered, color='LYZ')
+sc.pl.pca(adata_filtered, color='CD4', components='2,3')
 # %%
