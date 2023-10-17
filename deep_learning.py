@@ -87,12 +87,11 @@ sc.pp.neighbors(adata_filtered, n_neighbors=15, n_pcs=40)
 sc.tl.umap(adata_filtered)
 
 # %%
-X = adata_filtered.obsm["X_pca"]  # features (PCA components)
+X = adata_filtered.obsm["X_umap"]  # features (PCA components)
 y = adata_filtered.obs['cell-types']  # labels (cell types)
 
 # %%
 
-# Assuming 'y' is your target labels
 encoder = OneHotEncoder(sparse=False)
 y_onehot = encoder.fit_transform(y.values.reshape(-1, 1))
 
@@ -119,7 +118,7 @@ def build_model(hp):
 
     model.add(Conv1D(filters=hp_filters, kernel_size=hp_kernel_size,
               activation='relu', input_shape=(X_train.shape[1], 1)))
-    model.add(MaxPooling1D(pool_size=hp_pool_size))
+    # model.add(MaxPooling1D(pool_size=hp_pool_size))
     model.add(Flatten())
     model.add(Dense(hp_neurons, activation='relu'))
     # Assuming 'y' is categorical
@@ -181,6 +180,116 @@ print(f'F1 Score: {f1}')
 
 # Generate confusion matrix
 cm = confusion_matrix(y_test_label, y_pred_label)
+
+# Plot confusion matrix
+plt.figure(figsize=(10, 7))
+sns.heatmap(cm, annot=True, fmt='d')
+plt.xlabel('Predicted')
+plt.ylabel('Truth')
+
+plt.show()
+# %%
+
+test_adata = sc.read_h5ad('Test_dataset.h5ad')
+
+# %%
+test_adata.var['mt'] = test_adata.var_names.str.startswith('MT-')
+
+# Identify ribosomal genes (replace 'RPS' and 'RPL' with the actual prefixes used in your dataset)
+test_adata.var['rb'] = test_adata.var_names.str.startswith(('RPS', 'RPL'))
+
+# Calculate QC metrics for both mitochondrial and ribosomal genes
+sc.pp.calculate_qc_metrics(
+    test_adata, qc_vars=['mt', 'rb'], percent_top=None, log1p=False, inplace=True)
+total_genes_per_cells = test_adata.obs['n_genes_by_counts']
+
+median_genes = np.median(total_genes_per_cells)
+
+# Calculate MAD
+mad_genes = np.median(np.abs(total_genes_per_cells - median_genes))
+
+# Define lower and upper bounds
+lower_bound = median_genes - 3 * mad_genes
+upper_bound = median_genes + 3 * mad_genes
+
+# Identify outlier cells
+outlier_cells = np.sum((total_genes_per_cells < lower_bound)
+                       | (total_genes_per_cells > upper_bound))
+
+print("The number of outlier cells is: ", outlier_cells)
+# %%
+# Before filtering cells
+sbn.distplot(test_adata.obs.n_genes_by_counts)
+sbn.rugplot(test_adata.obs.n_genes_by_counts)
+# After filtering cells
+test_adata_filtered = test_adata[test_adata.obs.n_genes_by_counts > lower_bound, :]
+test_adata_filtered = test_adata_filtered[test_adata_filtered.obs.n_genes_by_counts < upper_bound, :]
+print('Number of cells after filtering cells: ', test_adata_filtered.shape[0])
+
+# Check the effect of data preprocessing, notice the change to the normal distribution
+sbn.distplot(test_adata_filtered.obs.n_genes_by_counts)
+sbn.rugplot(test_adata_filtered.obs.n_genes_by_counts)
+
+# %%
+sc.pp.filter_genes(test_adata_filtered, min_cells=3)
+
+# %%
+cell_types_to_filter = ['NK cell', 'B cell','CD8+ T cell', 'CD14+ Monocyte', 'CD16+ Monocyte']
+mask = test_adata_filtered.obs['cell-types'].isin(cell_types_to_filter)
+test_adata_filtered = test_adata_filtered[mask]
+
+cell_type_mapping = {
+    'NK cell': 'CD56+ NK',
+    'B cell': 'CD19+ B',
+    'CD8+ T cell': 'CD8+/CD45RA+ Naive Cytotoxic',
+    'CD14+ Monocyte': 'Dendritic',
+    'CD16+ Monocyte': 'Dendritic'
+}
+
+test_adata_filtered.obs['cell-types'] = test_adata_filtered.obs['cell-types'].map(cell_type_mapping)
+# %%
+sc.pp.normalize_total(test_adata_filtered, target_sum=None, inplace=True)
+# %%
+sc.pp.log1p(test_adata_filtered)
+
+# %%
+sc.pp.scale(test_adata_filtered)
+
+# %%
+sc.tl.pca(test_adata_filtered, svd_solver='arpack')
+# %%
+sc.pp.neighbors(test_adata_filtered, n_neighbors=15, n_pcs=40)
+# Embedding the neighborhood graph
+sc.tl.umap(test_adata_filtered)
+
+
+# %%
+X_unseen = test_adata_filtered.obsm["X_pca"]  # features (PCA components)
+y_unseen = test_adata_filtered.obs['cell-types']  # labels (cell types)
+y_onehot_unseen = encoder.fit_transform(y_unseen.values.reshape(-1, 1))
+# Reshape the data to be compatible with a 1D CNN
+X_unseen = X_unseen.reshape((X_unseen.shape[0], X_unseen.shape[1], 1))
+# %%
+y_unseen_pred = hypermodel.predict(X_unseen)
+y_unseen_pred
+# %%
+# Convert one-hot encoded test label to label encoded
+y_unseen_label = np.argmax(y_onehot_unseen, axis=1)
+
+# Convert one-hot encoded predictions to label encoded
+y_unseen_pred_label = np.argmax(y_unseen_pred, axis=1)
+
+# Calculate Accuracy
+accuracy = accuracy_score(y_unseen_label, y_unseen_pred_label)
+print(f'Accuracy: {accuracy}')
+
+# Calculate F1 Score
+f1 = f1_score(y_unseen_label, y_unseen_pred_label, average='macro')
+print(f'F1 Score: {f1}')
+
+# %%
+# Generate confusion matrix
+cm = confusion_matrix(y_unseen_label, y_unseen_pred_label)
 
 # Plot confusion matrix
 plt.figure(figsize=(10, 7))
