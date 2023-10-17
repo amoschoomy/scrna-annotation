@@ -92,7 +92,7 @@ encoder = OneHotEncoder(sparse_output=False)
 y_onehot = encoder.fit_transform(y.values.reshape(-1, 1))
 # Split the data into training and test sets
 X_train, X_test, y_train, y_test = train_test_split(
-    X, y_onehot, test_size=0.35, random_state=42)
+    X, y_onehot, test_size=0.3, random_state=42)
 
 X_test = X_test.reshape((X_test.shape[0], X_test.shape[1], 1))
 
@@ -100,19 +100,15 @@ X_test = X_test.reshape((X_test.shape[0], X_test.shape[1], 1))
 def build_model(hp):
     # Define the model
     model = Sequential()
-    hp_filters = hp.Int('filters', min_value=3, max_value=6, step=1)
-    hp_neurons = hp.Int('neurons', min_value=6, max_value=10, step=1)
-    hp_learning_rate = hp.Choice('learning_rate', values=[0.001,0.005,0.01, 0.0005, 0.002])
-    hp_l1 = hp.Float('l1', min_value=0.2, max_value=0.4, step=0.1)  # Added L2 hyperparameter
-    # hp_l2 = hp.Float('l2', min_value=0.1, max_value=1, step=0.1)  # Added L2 hyperparameter
+    hp_neurons = hp.Int('neurons', min_value=6, max_value=9, step=1)
+    hp_l1 = hp.Float('l2', min_value=0.20, max_value=0.26, step=0.01)  # Added L2 hyperparameter
 
-    hp_dropout_rate = hp.Float('dropout_rate', min_value=0.1, max_value=0.5, step=0.1)  # Added dropout rate hyperparameter
 
-    model.add(Conv1D(filters=hp_filters, kernel_size=2,
+    model.add(Conv1D(filters=5, kernel_size=2,
               activation='relu', kernel_initializer='he_normal', kernel_regularizer=l2(hp_l1), bias_regularizer=l2(hp_l1), input_shape=(X_train.shape[1], 1)))
     model.add(MaxPooling1D(pool_size=1))  # Added MaxPooling layer
     model.add(BatchNormalization())  # Added batch normalization layer
-    model.add(Dropout(hp_dropout_rate))  # Added dropout layer
+    model.add(Dropout(0.1))  # Added dropout layer
 
     model.add(Flatten())
 
@@ -123,7 +119,7 @@ def build_model(hp):
 
     # Compile the model
     model.compile(optimizer=keras.optimizers.Adam(
-        learning_rate=hp_learning_rate), loss='categorical_crossentropy', metrics=F1Score(average='macro'))
+        learning_rate=0.001), loss='categorical_crossentropy', metrics=F1Score(average='macro'))
     
     return model
 
@@ -140,7 +136,7 @@ tuner.search(X_train, y_train, epochs=50, validation_split=0.2,
 # Get the optimal hyperparameters
 best_hps = tuner.get_best_hyperparameters(num_trials=1)[0]
 
-#%%
+ #%%
 print(best_hps.get_config())
 # %%
 model = tuner.hypermodel.build(best_hps)
