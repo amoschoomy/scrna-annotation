@@ -1,10 +1,11 @@
 # %%%
+import random as rn
 from sklearn.metrics import confusion_matrix
 from sklearn.metrics import accuracy_score, f1_score
-from tensorflow.keras.layers import Conv1D,LSTM, MaxPooling1D, Flatten, Dense, BatchNormalization, Dropout
+from tensorflow.keras.layers import Conv1D, LSTM, MaxPooling1D, Flatten, Dense, BatchNormalization, Dropout
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.metrics import F1Score
-from keras.regularizers import l2,l1
+from keras.regularizers import l2, l1
 
 from sklearn.preprocessing import OneHotEncoder, LabelEncoder
 import numpy as np
@@ -17,12 +18,17 @@ from sklearn.model_selection import train_test_split
 import keras_tuner as kt
 import keras
 import tensorflow as tf
+from sklearn.model_selection import KFold
 
+
+# %%
+tf.keras.utils.set_random_seed(1)
+tf.config.experimental.enable_op_determinism()
 # %%
 adata = sc.read_h5ad('Group_7.h5ad')
 adata
 
-#%%
+# %%
 
 cell_type_mapping = {
     'CD8+/CD45RA+ Naive Cytotoxic': 'T cell',
@@ -42,7 +48,7 @@ adata.var['rb'] = adata.var_names.str.startswith(('RPS', 'RPL'))
 sc.pp.calculate_qc_metrics(
     adata, qc_vars=['mt', 'rb'], percent_top=None, log1p=False, inplace=True)
 
-#%%
+# %%
 # total genes detected in each cell
 total_genes_per_cells = adata.obs['n_genes_by_counts']
 
@@ -82,7 +88,7 @@ sc.pp.neighbors(adata_filtered, n_neighbors=15, n_pcs=40)
 # Embedding the neighborhood graph
 sc.tl.umap(adata_filtered)
 
-#%%
+# %%
 X = adata_filtered.obsm["X_umap"]  # features (PCA components)
 y = adata_filtered.obs['cell-types']  # labels (cell types)
 
@@ -96,39 +102,41 @@ X_train, X_test, y_train, y_test = train_test_split(
 
 X_test = X_test.reshape((X_test.shape[0], X_test.shape[1], 1))
 
-#%%
+# %%
 def build_model(hp):
     # Define the model
     model = Sequential()
-    hp_neurons = hp.Int('neurons', min_value=6, max_value=9, step=1)
-    hp_l1 = hp.Float('l2', min_value=0.20, max_value=0.26, step=0.01)  # Added L2 hyperparameter
-
-
+    hp_neurons = hp.Int('neurons', min_value=2, max_value=12, step=1)
     model.add(Conv1D(filters=5, kernel_size=2,
-              activation='relu', kernel_initializer='he_normal', kernel_regularizer=l2(hp_l1), bias_regularizer=l2(hp_l1), input_shape=(X_train.shape[1], 1)))
+              activation='relu', kernel_initializer='he_normal', kernel_regularizer=l2(0.25), bias_regularizer=l2(0.25), input_shape=(X_train.shape[1], 1),padding="same"))
+    model.add(Conv1D(filters=5, kernel_size=2, activation='relu', kernel_initializer='he_normal', kernel_regularizer=l2(0.25), bias_regularizer=l2(0.25), input_shape=(X_train.shape[1], 1),padding="same"))
     model.add(MaxPooling1D(pool_size=1))  # Added MaxPooling layer
     model.add(BatchNormalization())  # Added batch normalization layer
+    model.add(Flatten())
     model.add(Dropout(0.1))  # Added dropout layer
 
-    model.add(Flatten())
-
     # Assuming 'y' is categorical
-    model.add(Dense(hp_neurons, activation='relu',kernel_regularizer=l2(hp_l1), bias_regularizer=l2(hp_l1)))
+    model.add(Dense(hp_neurons, activation='relu',
+              kernel_regularizer=l2(0.25), bias_regularizer=l2(0.25)))
+        # Assuming 'y' is categorical
+    model.add(Dense(hp_neurons//2, activation='relu',
+              kernel_regularizer=l2(0.25), bias_regularizer=l2(0.25)))
     model.add(BatchNormalization())  # Added batch normalization layer
-    model.add(Dense(y.nunique(), activation='softmax', kernel_regularizer=l2(hp_l1), bias_regularizer=l2(hp_l1)))
+    model.add(Dropout(0.1))  # Added dropout layer
+    model.add(Dense(y.nunique(), activation='softmax',
+              kernel_regularizer=l2(0.25), bias_regularizer=l2(0.25)))
 
     # Compile the model
     model.compile(optimizer=keras.optimizers.Adam(
         learning_rate=0.001), loss='categorical_crossentropy', metrics=F1Score(average='macro'))
-    
-    return model
 
+    return model
 
 
 
 # %%
 tuner = kt.BayesianOptimization(
-    build_model, objective='loss', max_trials=5, seed=42)
+    build_model, objective='loss', max_trials=3, seed=42)
 stop_early = tf.keras.callbacks.EarlyStopping(monitor='loss', patience=5)
 tuner.search(X_train, y_train, epochs=50, validation_split=0.2,
              callbacks=[stop_early])
@@ -136,18 +144,18 @@ tuner.search(X_train, y_train, epochs=50, validation_split=0.2,
 # Get the optimal hyperparameters
 best_hps = tuner.get_best_hyperparameters(num_trials=1)[0]
 
- #%%
+# %%
 print(best_hps.get_config())
 # %%
 model = tuner.hypermodel.build(best_hps)
-history = model.fit(X_train, y_train, epochs=50, batch_size=16, validation_split=0.2, callbacks = stop_early)
+history = model.fit(X_train, y_train, epochs=50, batch_size=16,
+                    validation_split=0.2, callbacks=stop_early)
 
-val_acc_per_epoch = history.history['f1_score']
-best_epoch = val_acc_per_epoch.index(max(val_acc_per_epoch)) + 1
+val_acc_per_epoch = history.history['val_loss']
+best_epoch = val_acc_per_epoch.index(min(val_acc_per_epoch)) + 1
 print('Best epoch: %d' % (best_epoch,))
 
-#%%
-import matplotlib.pyplot as plt
+# %%
 
 # Plot training & validation accuracy values
 plt.figure(figsize=(12, 6))
@@ -175,7 +183,9 @@ plt.show()
 hypermodel = tuner.hypermodel.build(best_hps)
 
 # Retrain the model
-hypermodel.fit(X_train, y_train, epochs=best_epoch, batch_size=16)
+hypermodel.fit(X_train, y_train, epochs=7, batch_size=16)
+
+
 
 # %%
 # Make predictions on the test set
@@ -207,7 +217,7 @@ plt.show()
 # %%
 test_adata = sc.read_h5ad('Test_dataset.h5ad')
 
-#%%
+# %%
 test_adata.var['mt'] = test_adata.var_names.str.startswith('MT-')
 
 # Identify ribosomal genes (replace 'RPS' and 'RPL' with the actual prefixes used in your dataset)
@@ -246,8 +256,10 @@ sbn.distplot(test_adata_filtered.obs.n_genes_by_counts)
 sbn.rugplot(test_adata_filtered.obs.n_genes_by_counts)
 
 sc.pp.filter_genes(test_adata_filtered, min_cells=3)
+
 # %%
-cell_types_to_filter = ['NK cell', 'B cell','CD8+ T cell', 'CD14+ Monocyte', 'CD4+ T cell', 'CD16+ Monocyte', 'Plasmablast', 'Other T']
+cell_types_to_filter = ['NK cell', 'B cell', 'CD8+ T cell', 'CD14+ Monocyte',
+                        'CD4+ T cell', 'CD16+ Monocyte', 'Plasmablast', 'Other T']
 mask = test_adata_filtered.obs['cell-types'].isin(cell_types_to_filter)
 test_adata_filtered = test_adata_filtered[mask]
 
@@ -262,8 +274,9 @@ cell_type_mapping = {
     'Plasmablast': 'B cell'
 }
 
-test_adata_filtered.obs['cell-types'] = test_adata_filtered.obs['cell-types'].map(cell_type_mapping)
-#%%
+test_adata_filtered.obs['cell-types'] = test_adata_filtered.obs['cell-types'].map(
+    cell_type_mapping)
+# %%
 X_unseen = test_adata_filtered.obsm["X_umap"]  # features (PCA components)
 y_unseen = test_adata_filtered.obs['cell-types']  # labels (cell types)
 y_onehot_unseen = encoder.transform(y_unseen.values.reshape(-1, 1))
