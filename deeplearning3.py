@@ -1,3 +1,7 @@
+#%%
+
+# !pip install -r requirements.txt
+
 # %%%
 import random as rn
 from sklearn.metrics import confusion_matrix
@@ -18,10 +22,11 @@ from sklearn.model_selection import train_test_split
 import keras_tuner as kt
 import keras
 import tensorflow as tf
-from sklearn.model_selection import KFold
 
 
 # %%
+
+# set seed for reproducibility
 tf.keras.utils.set_random_seed(1)
 tf.config.experimental.enable_op_determinism()
 # %%
